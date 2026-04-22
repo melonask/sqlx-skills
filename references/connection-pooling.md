@@ -92,8 +92,7 @@ let options = PgConnectOptions::new()
     .ssl_mode(PgSslMode::Prefer)          // Prefer, Require, Disable, NoTls
     .statement_cache_capacity(100)        // Prepared statement cache size
     .application_name("my-app")           // Shows in pg_stat_activity
-    .set("search_path", "my_schema,public")  // Custom session parameter
-    .connect();
+    .options([("search_path", "my_schema,public")]);
 
 let pool = PgPoolOptions::new()
     .connect_with(options)

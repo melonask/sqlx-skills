@@ -101,17 +101,16 @@ let exists: bool = sqlx::query_scalar!(
 
 ## Type Overrides in Macros
 
-Sometimes the inferred type doesn't match what you need. Use the `as` syntax to override:
+Sometimes the inferred type doesn't match what you need. Use the `as` syntax to override.
+
+**Important**: The override syntax is different for MySQL and PostgreSQL/SQLite because it is embedded in the SQL string itself:
+
+| Database          | Override syntax                                   |
+| ----------------- | ------------------------------------------------- |
+| PostgreSQL/SQLite | `"column_name!"` or `"column_name: Type"`         |
+| MySQL             | `` `column_name!` `` or `` `column_name: Type` `` |
 
 ```rust
-// Override return column type
-let record = sqlx::query!(
-    "SELECT id, created_at as `created_at: chrono::DateTime<chrono::Utc>` FROM users WHERE id = $1",
-    1i64
-)
-.fetch_one(&pool)
-.await?;
-
 // Override parameter type
 let record = sqlx::query!(
     "SELECT * FROM users WHERE id = $1",
@@ -121,16 +120,40 @@ let record = sqlx::query!(
 .await?;
 ```
 
-**Important**: The type override syntax uses backtick-quoted identifiers:
+### PostgreSQL / SQLite — double-quoted identifiers
 
-- Return override: `column_name as \`type_path\``
-- Parameter override: `parameter as type_path`
+```rust
+// Force NOT NULL (useful for expressions Postgres can't infer)
+let record = sqlx::query!(r#"SELECT 1 as "id!""#)
+    .fetch_one(&pool)
+    .await?;
+
+// Override return column type
+let record = sqlx::query!(
+    r#"SELECT id, created_at as "created_at: chrono::DateTime<chrono::Utc>" FROM users WHERE id = $1"#,
+    1i64
+)
+.fetch_one(&pool)
+.await?;
+```
+
+### MySQL — backtick-quoted identifiers
+
+```rust
+let record = sqlx::query!(
+    "SELECT id, created_at as `created_at: chrono::DateTime<chrono::Utc>` FROM users WHERE id = ?",
+    1i64
+)
+.fetch_one(&pool)
+.await?;
+```
 
 Common cases where overrides are needed:
 
 - `TIMESTAMP` columns can map to `NaiveDateTime` or `DateTime<Utc>` — override to pick
 - `JSON`/`JSONB` columns can map to `serde_json::Value` or `Json<T>` — override for typed JSON
 - `NUMERIC` columns can map to `f64`, `BigDecimal`, or `Decimal` — override based on precision needs
+- Aggregate functions like `COUNT(*)` may be inferred as nullable depending on the database — use `!` to force non-null
 
 ## Unchecked Variants
 

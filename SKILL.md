@@ -92,31 +92,15 @@ Use these when you cannot set `DATABASE_URL` at compile time. They are not type-
 
 ```rust
 // query() returns anonymous PgRow — access columns by name or index
+// Note: `sqlx::Row` trait must be in scope for .get()
+use sqlx::Row;
+
 let row = sqlx::query("SELECT id, name FROM users WHERE id = $1")
     .bind(1)
     .fetch_one(&pool)
     .await?;
 let id: i64 = row.get("id");
 let name: String = row.get("name");
-
-// query_as() maps to a struct
-let user: User = sqlx::query_as("SELECT id, name FROM users WHERE id = $1")
-    .bind(1)
-    .fetch_one(&pool)
-    .await?;
-
-// query_scalar() returns single value
-let name: String = sqlx::query_scalar("SELECT name FROM users WHERE id = $1")
-    .bind(1)
-    .fetch_one(&pool)
-    .await?;
-
-// execute() for INSERT/UPDATE/DELETE (returns rows affected)
-let result = sqlx::query("DELETE FROM users WHERE id = $1")
-    .bind(1)
-    .execute(&pool)
-    .await?;
-println!("Deleted {} rows", result.rows_affected());
 ```
 
 ### 3. Fetch Strategies
@@ -151,6 +135,8 @@ let pool = PgPoolOptions::new()
 Transactions implement `Executor`, so you can pass them to any function that accepts a pool or connection.
 
 ```rust
+use sqlx::Acquire;
+
 // Manual transaction
 let mut tx = pool.begin().await?;
 sqlx::query!("INSERT INTO users (name) VALUES ($1)", "Alice")
@@ -163,7 +149,9 @@ tx.commit().await?;
 // Dropping tx without commit() triggers automatic rollback.
 
 // Closure-based (auto-commit on Ok, auto-rollback on Err)
-let result = pool.transaction::<_, _, sqlx::Error>(|tx| {
+// Requires acquiring a connection first — .transaction() is on Connection, not Pool.
+let mut conn = pool.acquire().await?;
+let result = conn.transaction::<_, _, sqlx::Error>(|tx| {
     Box::pin(async move {
         sqlx::query!("INSERT INTO users (name) VALUES ($1)", "Bob")
             .execute(&mut **tx).await?;
@@ -173,7 +161,7 @@ let result = pool.transaction::<_, _, sqlx::Error>(|tx| {
 
 // Nested transactions (SAVEPOINTs)
 let mut tx = pool.begin().await?;
-let mut nested = tx.begin().await?; // Creates a SAVEPOINT
+let mut nested = tx.begin().await?; // Creates a SAVEPOINT — requires `Acquire`
 nested.rollback().await?;           // Only rolls back to savepoint
 tx.commit().await?;                 // Outer transaction unaffected
 ```

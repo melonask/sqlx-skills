@@ -65,15 +65,17 @@ let roles: Vec<UserRole> = sqlx::query_scalar!(
 For high-performance bulk data loading:
 
 ```rust
+use sqlx::postgres::PgPoolCopyExt;
+
 // Binary COPY
 let mut writer = pool.copy_in_raw("COPY users FROM STDIN WITH (FORMAT binary)").await?;
-// Write binary-encoded data
+// Write binary-encoded data with .send()
 writer.finish().await?;
 
 // CSV COPY
-let mut writer = pool.copy_in_raw("COPY users FROM STDIN WITH (FORMAT csv)").await?;
-writer.write(b"1,Alice,alice@example.com\n").await?;
-writer.write(b"2,Bob,bob@example.com\n").await?;
+let mut writer = pool.copy_in_raw("COPY users (id, name, email) FROM STDIN WITH (FORMAT csv)").await?;
+writer.send(b"1,Alice,alice@example.com\n" as &[u8]).await?;
+writer.send(b"2,Bob,bob@example.com\n" as &[u8]).await?;
 let rows = writer.finish().await?;
 println!("Imported {} rows", rows);
 ```
@@ -120,11 +122,11 @@ use sqlx::postgres::PgSslMode;
 
 // Available modes:
 PgSslMode::Disable      // No SSL
-PgSslMode::Prefer      // Try SSL, fall back to plaintext (default)
+PgSslMode::Allow        // Try plaintext first; if that fails, try SSL
+PgSslMode::Prefer       // Try SSL first; if that fails, try plaintext (default)
 PgSslMode::Require     // Require SSL, but don't verify certificate
 PgSslMode::VerifyCa    // Require SSL + verify certificate authority
 PgSslMode::VerifyFull  // Require SSL + verify certificate + hostname match
-PgSslMode::NoTls       // Alias for Disable
 ```
 
 ## MySQL

@@ -1,16 +1,18 @@
-# sqlx Skill
+# sqlx-skills
 
 A comprehensive AI skill for the [sqlx](https://github.com/launchbadge/sqlx) Rust library — the async-first, pure-Rust SQL toolkit with compile-time query checking. Supports PostgreSQL, MySQL, and SQLite.
-
-```bash
-npx skills add melonask/sqlx-skills
-```
 
 ## Overview
 
 This skill enables an LLM to generate correct, production-ready Rust code using sqlx. It covers every major feature of the library with practical examples, type references, and common-pitfall documentation so that the LLM developer can build reliable database solutions without trial-and-error errors.
 
 The skill uses a **progressive disclosure** architecture: the main `SKILL.md` file provides a concise quick-reference with 11 essential patterns, while 8 deep-dive reference files cover each topic in full detail (type tables, error code catalogs, Cargo.toml recipes, and more).
+
+## Installation
+
+```bash
+npx skills add melonask/sqlx-skills
+```
 
 ## What This Skill Covers
 

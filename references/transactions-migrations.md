@@ -26,10 +26,13 @@ tx.commit().await?;
 
 ### Closure-Based Transactions
 
-The closure pattern auto-commits on `Ok(())` and auto-rollbacks on `Err`:
+The closure pattern auto-commits on `Ok(())` and auto-rollbacks on `Err`. The method is on `Connection`, not `Pool`, so you must acquire a connection first:
 
 ```rust
-let result = pool.transaction::<_, _, sqlx::Error>(|tx| {
+use sqlx::{Connection, PgPool};
+
+let mut conn = pool.acquire().await?;
+let result = conn.transaction::<_, _, sqlx::Error>(|tx| {
     Box::pin(async move {
         sqlx::query!("INSERT INTO users (name) VALUES ($1)", "Bob")
             .execute(&mut **tx)
@@ -55,9 +58,12 @@ Note the double dereference `**tx`: the closure receives `&mut Transaction`, and
 
 ### Nested Transactions (SAVEPOINTs)
 
-Nested transactions use database SAVEPOINTs. Rolling back a nested transaction only rolls back to the savepoint, not the outer transaction:
+Nested transactions use database SAVEPOINTs. Rolling back a nested transaction only rolls back to the savepoint, not the outer transaction.
+**Requires `sqlx::Acquire` to bring `begin()` into scope on a `Transaction`.**
 
 ```rust
+use sqlx::Acquire;
+
 let mut tx = pool.begin().await?;
 
 sqlx::query!("INSERT INTO users (name) VALUES ($1)", "Charlie")
@@ -107,7 +113,8 @@ where
 transfer_funds(&pool, 1, 2, 100.0).await?;
 
 // Use within a transaction (atomic)
-pool.transaction(|tx| {
+let mut conn = pool.acquire().await?;
+conn.transaction(|tx| {
     Box::pin(async move {
         transfer_funds(&mut **tx, 1, 2, 100.0).await?;
         Ok(())
