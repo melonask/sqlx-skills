@@ -178,7 +178,7 @@ sqlx::query("INSERT INTO users (name, email) VALUES (?, ?)")
     .execute(&pool)
     .await?;
 
-let id: i64 = sqlx::query_scalar("SELECT LAST_INSERT_ID()")
+let id: u64 = sqlx::query_scalar("SELECT LAST_INSERT_ID()")
     .fetch_one(&pool)
     .await?;
 ```

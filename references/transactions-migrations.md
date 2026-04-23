@@ -212,8 +212,8 @@ Embed migrations into the binary using the `migrate!()` macro:
 // Reads from ./migrations by default
 let migrator = sqlx::migrate!();
 
-// Custom path
-let migrator = sqlx::migrate!("migrations/");
+// Custom path (relative to the crate root where Cargo.toml is located)
+let migrator = sqlx::migrate!("./migrations");
 
 // Run all pending migrations
 migrator.run(&pool).await?;
@@ -226,7 +226,7 @@ This is useful for applications that self-migrate on startup (e.g., CLI tools, e
 The `#[sqlx::test]` macro automatically applies migrations before each test:
 
 ```rust
-#[sqlx::test(migrations = "migrations/")]
+#[sqlx::test(migrations = "./migrations")]
 async fn test_user_creation(pool: PgPool) -> sqlx::Result<()> {
     // The database is fully migrated at this point
     sqlx::query!("INSERT INTO users (name) VALUES ($1)", "Test User")

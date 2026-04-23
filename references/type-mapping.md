@@ -142,7 +142,7 @@ struct User {
 The simplest way to map a custom Rust type to a SQL type:
 
 ```rust
-#[derive(Debug, sqlx::Type, sqlx::Encode, sqlx::Decode)]
+#[derive(Debug, sqlx::Type)]
 #[sqlx(transparent)]
 struct Email(String);
 ```
@@ -152,7 +152,7 @@ struct Email(String);
 Map a Rust enum to a PostgreSQL enum type:
 
 ```rust
-#[derive(Debug, sqlx::Type, sqlx::Encode, sqlx::Decode)]
+#[derive(Debug, sqlx::Type)]
 #[sqlx(type_name = "user_role", rename_all = "lowercase")]
 enum UserRole {
     Admin,

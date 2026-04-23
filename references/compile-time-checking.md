@@ -80,7 +80,7 @@ The struct fields must match the SQL column names. Use `#[sqlx(rename = "...")]`
 Returns just one column value from one row. Ideal for COUNT, EXISTS, or looking up a single field:
 
 ```rust
-let count: i64 = sqlx::query_scalar!("SELECT COUNT(*) FROM users")
+let count: i64 = sqlx::query_scalar!("SELECT COUNT(*)::BIGINT FROM users")
     .fetch_one(&pool)
     .await?;
 

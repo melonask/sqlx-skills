@@ -81,7 +81,7 @@ let user: User = sqlx::query_as!(User, "SELECT id, name FROM users WHERE id = $1
     .await?;
 
 // query_scalar! returns a single column value
-let count: i64 = sqlx::query_scalar!("SELECT COUNT(*) FROM users")
+let count: i64 = sqlx::query_scalar!("SELECT COUNT(*)::BIGINT FROM users")
     .fetch_one(&pool)
     .await?;
 ```
@@ -316,7 +316,7 @@ migrator.run(&pool).await?;
 Automatically creates an isolated test database, runs migrations, and cleans up afterward.
 
 ```rust
-#[sqlx::test(migrations = "migrations/")]
+#[sqlx::test(migrations = "./migrations")]
 async fn test_create_user(pool: PgPool) -> sqlx::Result<()> {
     sqlx::query!("INSERT INTO users (name) VALUES ($1)", "Alice")
         .execute(&pool).await?;

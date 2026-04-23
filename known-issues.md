@@ -1,371 +1,182 @@
-# Known Issues Tested April 2026
+# Known Issues Found During sqlx Skill Testing (sqlx v0.8.6, Rust 1.95, April 2026)
 
-This file documents errors found in the skill files when tested against **sqlx 0.8.6** (latest stable as of 2026-04-22). Each issue includes a link to the file where it occurs, the error message, a minimal reproduction, and the fix.
+This document records verified bugs, misleading examples, or common pitfalls encountered while running real-world test code against the sqlx skill's `md` files. Every issue was confirmed with actual code execution before being added.
 
 ---
 
-## Issue 1 — `pool.transaction()` does not exist
+## Issue 1: MySQL `LAST_INSERT_ID()` returns `BIGINT UNSIGNED`, not `i64`
 
-| Field        | Value                                                                                 |
-| ------------ | ------------------------------------------------------------------------------------- |
-| **Location** | `SKILL.md` (Core Patterns > Transactions) and `references/transactions-migrations.md` |
-| **Severity** | Compile error                                                                         |
+### Location in Skill
+- `references/database-specifics.md` — MySQL INSERT and Auto-Increment section
 
-### Problem
+### Original Skill Code (Buggy)
+```rust
+let id: i64 = sqlx::query_scalar("SELECT LAST_INSERT_ID()")
+    .fetch_one(&pool)
+    .await?;
+```
 
-Both files show calling `.transaction()` directly on a `PgPool`:
+### Actual Error
+```
+Error: ColumnDecode { index: "0", source: "mismatched types; Rust type `i64` (as SQL type `BIGINT`) is not compatible with SQL type `BIGINT UNSIGNED`" }
+```
+
+### Root Cause
+MySQL's `LAST_INSERT_ID()` returns a `BIGINT UNSIGNED`. sqlx maps unsigned MySQL integers to `u64`, not `i64`.
+
+### Verified Fix
+```rust
+let id: u64 = sqlx::query_scalar("SELECT LAST_INSERT_ID()")
+    .fetch_one(&pool)
+    .await?;
+```
+
+Additionally, `LAST_INSERT_ID()` is **connection-specific**. If using a pool, you must execute the INSERT and the `LAST_INSERT_ID()` query on the **same acquired connection**:
 
 ```rust
-let result = pool.transaction::<_, _, sqlx::Error>(|tx| {
-    Box::pin(async move {
-        sqlx::query!("INSERT INTO users (name) VALUES ($1)", "Bob")
-            .execute(&mut **tx).await?;
-        Ok(())
-    })
-}).await?;
-```
-
-This fails to compile with:
-
-```
-error[E0599]: no method named `transaction` found for struct `Pool<DB>` in the current scope
-```
-
-`.transaction()` is defined on the `Connection` trait, not on `Pool`. You must acquire a connection first.
-
-### Reproduction
-
-```rust
-// Fails
-let result = pool.transaction::<_, _, sqlx::Error>(|tx| {
-    Box::pin(async move { Ok(()) })
-}).await?;
-```
-
-### Fix
-
-Use `pool.acquire().await?` to get a `PoolConnection`, then call `.transaction()` on it:
-
-```rust
-use sqlx::{Connection, PgPool};
-
 let mut conn = pool.acquire().await?;
-conn.transaction::<_, _, sqlx::Error>(|tx| {
-    Box::pin(async move {
-        sqlx::query!("INSERT INTO users (name) VALUES ($1)", "Bob")
-            .execute(&mut **tx).await?;
-        Ok(())
-    })
-}).await?;
-```
-
-Alternatively, for manual transactions use `pool.begin().await?` which returns a `Transaction`.
-
----
-
-## Issue 2 — Wrong compile-time type-override syntax for PostgreSQL/SQLite
-
-| Field        | Value                                                            |
-| ------------ | ---------------------------------------------------------------- |
-| **Location** | `references/compile-time-checking.md` (Type Overrides in Macros) |
-| **Severity** | Compile error                                                    |
-
-### Problem
-
-The skill claims the override syntax is:
-
-```rust
-"SELECT id, created_at as `created_at: chrono::DateTime<chrono::Utc>` FROM users WHERE id = $1"
-```
-
-This uses backticks, which is the **MySQL** syntax. For **PostgreSQL** and **SQLite** the correct syntax uses double quotes:
-
-```rust
-r#"SELECT id, created_at as "created_at: chrono::DateTime<chrono::Utc>" FROM users WHERE id = $1"#
-```
-
-### Reproduction
-
-```rust
-let record = sqlx::query!(
-    "SELECT id, created_at as `created_at: chrono::DateTime<chrono::Utc>` FROM users WHERE id = $1",
-    1i64
-)
-.fetch_one(&pool)
-.await?;
-```
-
-This produces a SQL syntax error from the Postgres backend during macro expansion.
-
-### Fix
-
-Use double-quoted identifiers in Postgres / SQLite, backticks in MySQL:
-
-```rust
-// PostgreSQL / SQLite
-let record = sqlx::query!(
-    r#"SELECT id, created_at as "created_at: chrono::DateTime<chrono::Utc>" FROM users WHERE id = $1"#,
-    1i64
-)
-.fetch_one(&pool)
-.await?;
-
-// MySQL
-let record = sqlx::query!(
-    "SELECT id, created_at as `created_at: chrono::DateTime<chrono::Utc>` FROM users WHERE id = ?",
-    1i64
-)
-.fetch_one(&pool)
-.await?;
-```
-
----
-
-## Issue 3 — `PgConnectOptions::set()` does not exist
-
-| Field        | Value                                                           |
-| ------------ | --------------------------------------------------------------- |
-| **Location** | `references/connection-pooling.md` (PostgreSQL Connect Options) |
-| **Severity** | Compile error                                                   |
-
-### Problem
-
-The skill shows:
-
-```rust
-let options = PgConnectOptions::new()
-    ...
-    .set("search_path", "my_schema,public")
-    .connect();
-```
-
-`PgConnectOptions` has no method named `set`. The correct method for arbitrary key/value session parameters is `options(...)` (taking an iterable of key-value pairs).
-
-### Reproduction
-
-```rust
-let options = PgConnectOptions::new()
-    .set("search_path", "my_schema,public")
-    .connect();
-```
-
-Compile error:
-
-```
-error[E0599]: no method named `set` found for struct `PgConnectOptions`
-```
-
-### Fix
-
-Use `.options(...)` instead:
-
-```rust
-let options = PgConnectOptions::new()
-    .host("localhost")
-    .port(5432)
-    .username("user")
-    .password("password")
-    .database("mydb")
-    .ssl_mode(PgSslMode::Prefer)
-    .application_name("my-app")
-    .options([("search_path", "my_schema,public")]);
-
-let pool = PgPoolOptions::new()
-    .connect_with(options)
+sqlx::query("INSERT INTO users (name) VALUES (?)")
+    .bind("Alice")
+    .execute(&mut *conn)
+    .await?;
+let id: u64 = sqlx::query_scalar("SELECT LAST_INSERT_ID()")
+    .fetch_one(&mut *conn)
     .await?;
 ```
 
 ---
 
-## Issue 4 — PostgreSQL COPY IN API requires trait import and uses `.send()`, not `.write()`
+## Issue 2: `#[derive(sqlx::Type, sqlx::Encode, sqlx::Decode)]` causes conflicting trait implementations
 
-| Field        | Value                                                |
-| ------------ | ---------------------------------------------------- |
-| **Location** | `references/database-specifics.md` (PostgreSQL COPY) |
-| **Severity** | Compile error                                        |
+### Location in Skill
+- `references/type-mapping.md` — Transparent Wrapper and Enum Mapping sections
 
-### Problem
+### Original Skill Code (Buggy)
+```rust
+#[derive(Debug, sqlx::Type, sqlx::Encode, sqlx::Decode)]
+#[sqlx(type_name = "user_role", rename_all = "lowercase")]
+enum UserRole {
+    Admin,
+    User,
+    Guest,
+}
+```
 
-The skill shows:
+### Actual Error
+```
+error[E0119]: conflicting implementations of trait `sqlx::Encode<'_, _>` for type `UserRole`
+```
+
+### Root Cause
+The `sqlx::Type` derive macro **already generates** `Encode` and `Decode` implementations (as well as `sqlx::Encode` / `sqlx::Decode` trait derivations). Explicitly adding `sqlx::Encode` and `sqlx::Decode` as separate derive macro arguments creates duplicate/conflicting impls.
+
+### Verified Fix
+Use **only** `#[derive(sqlx::Type)]` for enums and structs with `#[sqlx(transparent)]`:
 
 ```rust
-let mut writer = pool.copy_in_raw("COPY users FROM STDIN WITH (FORMAT csv)").await?;
-writer.write(b"1,Alice,alice@example.com\n").await?;
-writer.write(b"2,Bob,bob@example.com\n").await?;
-let rows = writer.finish().await?;
+#[derive(Debug, sqlx::Type)]
+#[sqlx(type_name = "user_role", rename_all = "lowercase")]
+enum UserRole { Admin, User, Guest }
+
+#[derive(Debug, sqlx::Type)]
+#[sqlx(transparent)]
+struct Email(String);
 ```
 
-Two issues:
+---
 
-1. `copy_in_raw` is defined on the `PgPoolCopyExt` trait, which must be imported.
-2. The method on `PgCopyIn` is `send()`, not `write()`.
-3. `send()` takes `impl Deref<Target = [u8]>`. Passing a byte-string literal (`b"..."`) produces a `&[u8; N]` which does **not** deref to `[u8]` — you must cast to `&[u8]`.
+## Issue 3: `cargo sqlx prepare` — relative paths in `migrate!()` macro are NOT supported with `paths relative to the current file's directory`
 
-### Reproduction
+### Location in Skill
+- `references/transactions-migrations.md` — Embedding Migrations in Code
+- `references/transactions-migrations.md` — `#[sqlx::test]` With Migrations
+
+### Original Skill Code (Buggy)
+```rust
+let migrator = sqlx::migrate!("migrations/");
+```
+
+### Actual Error
+```
+error: paths relative to the current file's directory are not currently supported
+```
+
+### Root Cause
+The `migrate!()` macro requires the migration path to be relative to the **crate root** (the directory containing `Cargo.toml`), not the current source file's directory.
+
+### Verified Fix
+Pass the path relative to the crate root:
 
 ```rust
-let mut writer = pool.copy_in_raw("COPY users (id,name,email) FROM STDIN WITH (FORMAT csv)").await?;
-writer.write(b"1,Alice,alice@example.com\n").await?;
+let migrator = sqlx::migrate!("./migrations");
 ```
 
-Compile errors:
+Note: The trailing slash is optional, but a leading `./` is recommended for crate-relative resolution.
 
-```
-error[E0599]: no method named `copy_in_raw` found for struct `Pool<Postgres>`
-error[E0599]: no method named `write` found for struct `PgCopyIn<C>`
-```
+---
 
-### Fix
+## Issue 4: `PgCopyIn::send()` requires `impl Deref<Target = [u8]>`
 
+### Location in Skill
+- `references/database-specifics.md` — PostgreSQL COPY (Bulk Import)
+
+### Original Skill Code (Buggy)
 ```rust
-use sqlx::postgres::PgPoolCopyExt;
+let mut writer = pool.copy_in_raw("...").await?;
+writer.send(b"1,Alice,alice@example.com\n").await?;
+```
 
-let mut writer = pool
-    .copy_in_raw("COPY users (id, name, email) FROM STDIN WITH (FORMAT csv)")
-    .await?;
+### Actual Error
+```
+error[E0271]: type mismatch resolving `<&[u8; 26] as Deref>::Target == [u8]`
+```
 
+### Root Cause
+Byte string literals (`b"..."`) have type `&[u8; N]`, which does **not** implement `Deref<Target = [u8]>` directly in the context `send()` expects. You must cast to a slice.
+
+### Verified Fix
+```rust
 writer.send(b"1,Alice,alice@example.com\n" as &[u8]).await?;
-writer.send(b"2,Bob,bob@example.com\n" as &[u8]).await?;
-
-let rows = writer.finish().await?;
 ```
+
+Alternatively, use a `Vec<u8>` or string converted to bytes.
 
 ---
 
-## Issue 5 — `row.get()` requires `sqlx::Row` trait in scope
+## Issue 5: `query_scalar!("SELECT COUNT(*) ...")` may return `Option<T>` depending on database inference
 
-| Field        | Value                                                             |
-| ------------ | ----------------------------------------------------------------- |
-| **Location** | `SKILL.md` (Runtime Query Functions) and multiple reference files |
-| **Severity** | Compile error                                                     |
+### Location in Skill
+- `references/compile-time-checking.md` — `query_scalar!` section
+- `references/testing-mocking.md` — With Fixtures section
 
-### Problem
-
-The skill repeatedly shows:
-
-```rust
-let id: i64 = row.get("id");
-```
-
-without mentioning that `sqlx::Row` must be in scope. `get()` is a trait method on `sqlx::Row`, not an inherent method on the row structs.
-
-### Reproduction
-
-```rust
-let row = sqlx::query("SELECT id, name FROM users WHERE id = $1")
-    .bind(1)
-    .fetch_one(&pool)
-    .await?;
-let id: i64 = row.get("id");
-```
-
-Compile error:
-
-```
-error[E0599]: no method named `get` found for struct `PgRow`
-```
-
-### Fix
-
-Add `use sqlx::Row;` at the top of the file:
-
-```rust
-use sqlx::{Row, query};
-
-let row = sqlx::query("SELECT id, name FROM users WHERE id = $1")
-    .bind(1)
-    .fetch_one(&pool)
-    .await?;
-let id: i64 = row.get("id");
-```
-
----
-
-## Issue 6 — Nested transaction `tx.begin()` requires trait import
-
-| Field        | Value                                                                 |
-| ------------ | --------------------------------------------------------------------- |
-| **Location** | `SKILL.md` (Transactions) and `references/transactions-migrations.md` |
-| **Severity** | Compile error                                                         |
-
-### Problem
-
-The skill shows:
-
-```rust
-let mut tx = pool.begin().await?;
-let mut nested = tx.begin().await?;
-```
-
-`Transaction::begin()` comes from the `Acquire` trait. Without importing `Acquire`, the compiler sees only the trait's associated function, not a method, leading to:
-
-```
-error[E0599]: no method named `begin` found for struct `Transaction<'_, Sqlite>`
-```
-
-### Reproduction
-
-```rust
-let mut tx = pool.begin().await?;
-let mut nested = tx.begin().await?; // fails
-```
-
-### Fix
-
-Import `Acquire`:
-
-```rust
-use sqlx::Acquire;
-
-let mut tx = pool.begin().await?;
-let mut nested = tx.begin().await?; // now works
-```
-
----
-
-## Issue 7 — `query_scalar!` aggregate nullability is database-specific
-
-| Field        | Value                                             |
-| ------------ | ------------------------------------------------- |
-| **Location** | `SKILL.md`, `references/compile-time-checking.md` |
-| **Severity** | Compile error on PostgreSQL                       |
-
-### Problem
-
-The skill shows:
-
+### Original Skill Code (Buggy)
 ```rust
 let count: i64 = sqlx::query_scalar!("SELECT COUNT(*) FROM users")
     .fetch_one(&pool)
     .await?;
 ```
 
-On **SQLite** this compiles successfully because sqlx infers `COUNT(*)` as non-null. On **PostgreSQL** the macro infers it as `Option<i64>`, producing:
-
+### Actual Error
 ```
 error[E0308]: `?` operator has incompatible types
-  expected `i64`, found `Option<i64>`
+expected `i64`, found `Option<i64>`
 ```
 
-### Reproduction
+### Root Cause
+The compile-time macros infer the return type based on the database metadata. For aggregate functions like `COUNT(*)`, some PostgreSQL versions may infer the result as nullable (`Option<i64>`). This is especially common with PostgreSQL.
+
+### Verified Fix
+Either use `Option<i64>` as the type, or use a type override with `COUNT(*)::BIGINT`:
 
 ```rust
-// On PostgreSQL
-let count: i64 = sqlx::query_scalar!("SELECT COUNT(*) FROM users")
+let count: i64 = sqlx::query_scalar!("SELECT COUNT(*)::BIGINT FROM users")
     .fetch_one(&pool)
     .await?;
 ```
 
-### Fix
-
-Use `Option<i64>` (or use a type override to force non-null):
+Or accept `Option`:
 
 ```rust
-let count: i64 = sqlx::query_scalar!("SELECT COUNT(*) as \"count!: i64\" FROM users")
-    .fetch_one(&pool)
-    .await?;
-
-// Or accept Option
 let count: Option<i64> = sqlx::query_scalar!("SELECT COUNT(*) FROM users")
     .fetch_one(&pool)
     .await?;
@@ -373,50 +184,119 @@ let count: Option<i64> = sqlx::query_scalar!("SELECT COUNT(*) FROM users")
 
 ---
 
-## Issue 8 — Missing `PgConnectOptions::connect()` is not async
+## Issue 6: `#[sqlx::test(migrations = "...")]` — relative path from test file directory NOT supported
 
-| Field        | Value                                                           |
-| ------------ | --------------------------------------------------------------- |
-| **Location** | `references/connection-pooling.md` (PostgreSQL Connect Options) |
-| **Severity** | Compile error                                                   |
+### Location in Skill
+- `references/testing-mocking.md` — With Migrations section
+
+### Original Skill Code (Buggy)
+```rust
+#[sqlx::test(migrations = "migrations/")]
+async fn test_with_schema(pool: PgPool) -> sqlx::Result<()> { ... }
+```
+
+### Actual Error
+```
+error: paths relative to the current file's directory are not currently supported
+```
+
+### Root Cause
+Same as Issue 3 — the `migrate!()` macro (internally used by `#[sqlx::test]`) requires paths relative to the crate root, not the test file's directory.
+
+### Verified Fix
+Use a crate-root-relative path, or (safer) don't specify `migrations` if your schema is already present in the test DB. If migrations are needed, place them at the crate root and use:
+
+```rust
+#[sqlx::test(migrations = "./migrations")]
+async fn test_with_schema(pool: PgPool) -> sqlx::Result<()> { ... }
+```
+
+Alternatively, create tables inline in the test without relying on migrations for compile-time checked macros.
+
+---
+
+## Issue 7: `chrono` needs `serde` feature for `#[derive(Serialize, Deserialize)]` on structs containing `DateTime<Utc>`
+
+### Location in Skill
+- `references/compile-time-checking.md` — `query!()` examples with `chrono::DateTime<chrono::Utc>`
 
 ### Problem
+The skill frequently shows structs with `chrono::DateTime<chrono::Utc>` and `#[derive(Serialize, Deserialize)]`, but does not mention that `chrono` must be configured with the `serde` feature:
 
-The skill shows:
-
-```rust
-let options = PgConnectOptions::new()
-    ...
-    .connect();
-
-let pool = PgPoolOptions::new()
-    .connect_with(options)
-    .await?;
+```toml
+chrono = { version = "0.4", features = ["serde"] }
 ```
 
-`PgConnectOptions::new()...connect()` is **not** a method on `PgConnectOptions`. The code should build options first, then pass them to `PgPoolOptions::connect_with(options)` (which itself is async).
-
-### Reproduction
-
-```rust
-let options = PgConnectOptions::new()
-    .host("localhost")
-    .connect(); // <-- does not exist
+### Actual Error (without `serde` feature)
+```
+error[E0277]: the trait bound `DateTime<Utc>: serde::Serialize` is not satisfied
+error[E0277]: the trait bound `DateTime<Utc>: serde::Deserialize<'_>` is not satisfied
 ```
 
-### Fix
+### Verified Fix
+Add the `serde` feature to `chrono` in `Cargo.toml`:
 
-Simply remove `.connect()` and pass the options struct to `connect_with(...)`:
-
-```rust
-let options = PgConnectOptions::new()
-    .host("localhost")
-    .port(5432)
-    .username("user")
-    .password("password")
-    .database("mydb");
-
-let pool = PgPoolOptions::new()
-    .connect_with(options)
-    .await?;
+```toml
+chrono = { version = "0.4", features = ["serde"] }
 ```
+
+---
+
+## Issue 8: `uuid` requires `v4` feature for `Uuid::new_v4()`
+
+### Location in Skill
+- `references/database-specifics.md` — UUID Type section
+
+### Problem
+The skill shows `Uuid::new_v4()` but does not mention that the `uuid` crate must have the `v4` feature enabled.
+
+### Actual Error (without `v4` feature)
+```
+error[E0599]: no function or associated item named `new_v4` found for struct `Uuid`
+```
+
+### Verified Fix
+```toml
+uuid = { version = "1", features = ["v4"] }
+```
+
+---
+
+## Issue 9: `ipnet` type needs `ipnet` dependency in Cargo.toml, not just sqlx feature
+
+### Location in Skill
+- `references/database-specifics.md` — Network Types section
+- `references/type-mapping.md` — Network Types
+
+### Problem
+The skill says `ipnet::IpNet` requires the `ipnet` feature on sqlx, but in practice the `ipnet` crate must also be added as an explicit dependency because the Rust code directly uses `ipnet::IpNet`.
+
+### Actual Error
+```
+error[E0433]: cannot find module or crate `ipnet` in this scope
+```
+
+### Verified Fix
+Add `ipnet` as a direct dependency **in addition to** enabling the sqlx feature:
+
+```toml
+[dependencies]
+sqlx = { version = "0.8", features = ["ipnet", "postgres", ...] }
+ipnet = "2"
+```
+
+---
+
+## Summary Table
+
+| # | Issue | Skill File | Severity |
+|---|-------|------------|----------|
+| 1 | MySQL `LAST_INSERT_ID()` type is `u64`, not `i64` | `database-specifics.md` | **High** |
+| 2 | `sqlx::Type` already includes `Encode`/`Decode` | `type-mapping.md` | **High** |
+| 3 | `migrate!("...")` paths must be crate-root-relative | `transactions-migrations.md` | **Medium** |
+| 4 | `PgCopyIn::send()` needs `as &[u8]` cast | `database-specifics.md` | **Medium** |
+| 5 | `COUNT(*)` may infer to `Option<i64>` in `query_scalar!` | `compile-time-checking.md` | **Medium** |
+| 6 | `#[sqlx::test(migrations = ...)]` needs crate-relative path | `testing-mocking.md` | **Medium** |
+| 7 | `chrono` needs `serde` feature for struct derives | `compile-time-checking.md` | **Low** |
+| 8 | `uuid` needs `v4` feature for `new_v4()` | `database-specifics.md` | **Low** |
+| 9 | `ipnet` needs explicit dependency in Cargo.toml | `type-mapping.md` | **Low** |

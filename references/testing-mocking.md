@@ -30,7 +30,7 @@ async fn test_create_user(pool: PgPool) -> sqlx::Result<()> {
 Automatically applies migrations before the test runs:
 
 ```rust
-#[sqlx::test(migrations = "migrations/")]
+#[sqlx::test(migrations = "./migrations")]
 async fn test_with_schema(pool: PgPool) -> sqlx::Result<()> {
     // All tables, indexes, and seed data from migrations/ are ready
     sqlx::query!("INSERT INTO users (name, email) VALUES ($1, $2)", "Bob", "bob@test.com")
@@ -49,7 +49,7 @@ Apply additional SQL files (test data) after migrations:
 // INSERT INTO users (name, email) VALUES ('Alice', 'alice@example.com');
 // INSERT INTO users (name, email) VALUES ('Bob', 'bob@example.com');
 
-#[sqlx::test(migrations = "migrations/", fixtures("tests/fixtures/users.sql"))]
+#[sqlx::test(migrations = "./migrations", fixtures("tests/fixtures/users.sql"))]
 async fn test_with_fixtures(pool: PgPool) -> sqlx::Result<()> {
     // users.sql has been executed — test data is ready
     let count: i64 = sqlx::query_scalar!("SELECT COUNT(*) FROM users")
@@ -64,7 +64,7 @@ async fn test_with_fixtures(pool: PgPool) -> sqlx::Result<()> {
 
 ```rust
 #[sqlx::test(
-    migrations = "migrations/",
+    migrations = "./migrations",
     fixtures("tests/fixtures/users.sql", "tests/fixtures/posts.sql")
 )]
 async fn test_with_multiple_fixtures(pool: PgPool) -> sqlx::Result<()> {
@@ -247,7 +247,7 @@ async fn seed_users(pool: &PgPool) -> sqlx::Result<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "migrations/")]
+#[sqlx::test(migrations = "./migrations")]
 async fn test_list_users(pool: PgPool) -> sqlx::Result<()> {
     seed_users(&pool).await?;
     let users = sqlx::query_as!(User, "SELECT * FROM users")
